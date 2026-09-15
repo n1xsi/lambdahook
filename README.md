@@ -24,11 +24,13 @@ Based on [8dcc](https://github.com/8dcc/hl-cheat) and [UnkwUsr](https://github.c
 
 * **ESP**.
 
+If your ESP works incorrectly (e.g. in DoD) - just press button "M" to toggle map and fix ESP with boxes and names.
+
 ### Also cheat has its own **injector**:
 compile [injector.c](injector/injector.c) ⟶ start game ⟶ open injector.exe
 
-### Logs
-Logs are written here: "C:\dod-cheat-log.txt"
+## Logs
+Logs about inject, hooks and some features are written here: `C:\dod-cheat-log.txt`
 
 ## How to build
 
