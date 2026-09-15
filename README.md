@@ -26,3 +26,15 @@ Based on [8dcc](https://github.com/8dcc/hl-cheat) and [UnkwUsr](https://github.c
 
 ### Also cheat has its own **injector**:
 compile [injector.c](injector/injector.c) ⟶ start game ⟶ open injector.exe
+
+### Logs
+Logs are written here: "C:\dod-cheat-log.txt"
+
+## How to build
+
+In windows 10 I use mingw32 and ninja:
+```bash
+export PATH="/c/msys64/mingw32/bin:$PATH" && cd "C:\path\to\lambdahook\build" && /c/msys64/mingw32/bin/ninja.exe 2>&1
+```
+
+Result will be here: `build/bin/libdodcheat.dll`
