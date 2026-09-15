@@ -2,6 +2,10 @@
   <img src="https://i.imgur.com/KfSK09T.jpeg" width="20%">
   
   lambdahook
+
+  [![C++](https://img.shields.io/badge/c++-1a1a1a?style=for-the-badge&logo=c%2B%2B&logoColor=00599c)](#)
+  [![CMake](https://img.shields.io/badge/CMake-1a1a1a?style=for-the-badge&logo=cmake&logoColor=white)](#)
+  [![Platform](https://custom-icon-badges.demolab.com/badge/Windows-1a1a1a?logo=windows&style=for-the-badge)](#)
 </h1>
 
 Windows cheat for GoldSRC-games after 25th anniversary update.
