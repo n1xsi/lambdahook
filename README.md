@@ -12,6 +12,10 @@ Windows cheat for GoldSRC-games after 25th anniversary update.
 
 Based on [8dcc](https://github.com/8dcc/hl-cheat) and [UnkwUsr](https://github.com/UnkwUsr/hlhax) sources. They didn't want to update the sources, so I did it myself and made some improvements.
 
+> [!WARNING]
+> Cheat is under development.
+> I’m trying to update the old hooks and functions to match the new update for all goldsrc games.
+
 ## Available features
 
 <h3> only in dod <img src="https://shared.fastly.steamstatic.com/community_assets/images/apps/30/aadc0ce51ff6ba2042d633f8ec033b0de62091d0.jpg" align="top" width="3%">: </h3>
@@ -25,7 +29,8 @@ Based on [8dcc](https://github.com/8dcc/hl-cheat) and [UnkwUsr](https://github.c
 
 * **ESP**.
 
-If your ESP works incorrectly (e.g. in DoD) - just press button "M" to toggle map and fix ESP with boxes and names.
+> [!NOTE]
+> If your ESP works incorrectly (e.g. in DoD) - just press button "M" to toggle map and fix ESP with boxes and names.
 
 ### Also cheat has its own **injector**:
 compile [injector.c](injector/injector.c) ⟶ start game ⟶ open injector.exe
