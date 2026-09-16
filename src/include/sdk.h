@@ -1048,6 +1048,12 @@ typedef struct engine_studio_api_s {
  * Studio model renderer (vtable struct)
  *===========================================================================*/
 
+typedef struct r_studio_interface_s {
+    int              version;
+    int              (*StudioDrawModel)(int flags);
+    int              (*StudioDrawPlayer)(int flags, entity_state_t* pplayer);
+} r_studio_interface_t;
+
 typedef struct StudioModelRenderer_s {
     void             (*CStudioModelRenderer)(void* this_ptr);
     void             (*_CStudioModelRenderer)(void* this_ptr);

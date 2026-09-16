@@ -1,3 +1,6 @@
+#include <stdio.h>
+#include <string.h>
+#include <windows.h>
 #include <gl/gl.h>
 
 #include "../include/util.h"
@@ -12,23 +15,93 @@ enum chams_settings {
     HAND_CHAMS   = 2,
 };
 
-enum visible_flags {
-    NONE               = 0,
-    ENEMY_VISIBLE      = 1,
-    ENEMY_NOT_VISIBLE  = 2,
-    FRIEND_VISIBLE     = 3,
-    FRIEND_NOT_VISIBLE = 4,
-    HANDS              = 5,
-};
+typedef void (__thiscall *StudioRenderFinal_fn)(void* this_ptr);
 
-static void set_chams_color(visible_flags mode) {
-    switch (mode) {
-        case ENEMY_VISIBLE:       glColor4f(0.40f, 0.73f, 0.41f, 1.0f); break;
-        case ENEMY_NOT_VISIBLE:   glColor4f(0.90f, 0.07f, 0.27f, 1.0f); break;
-        case FRIEND_VISIBLE:      glColor4f(0.16f, 0.71f, 0.96f, 1.0f); break;
-        case FRIEND_NOT_VISIBLE:  glColor4f(0.10f, 0.20f, 0.70f, 1.0f); break;
-        case HANDS:               glColor4f(0.94f, 0.66f, 0.94f, 1.0f); break;
-        default: break;
+static void call_StudioRenderFinal(void* this_ptr) {
+    StudioRenderFinal_fn fn = (StudioRenderFinal_fn)i_studiomodelrenderer->StudioRenderFinal;
+    fn(this_ptr);
+}
+
+static inline float cvar_color(cvar_t* cv) {
+    return cv->value / 255.0f;
+}
+
+typedef void (APIENTRY *glColor4f_fn)(GLfloat, GLfloat, GLfloat, GLfloat);
+static glColor4f_fn real_glColor4f = NULL;
+
+static bool chams_active = false;
+static float chams_r = 1.0f, chams_g = 1.0f, chams_b = 1.0f;
+
+static bool glcolor_hooked = false;
+static uint8_t saved_bytes[5];
+
+static void APIENTRY h_glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
+    if (chams_active) {
+        r = chams_r;
+        g = chams_g;
+        b = chams_b;
+        /* Force textures off — StudioRenderFinal re-enables them */
+        glDisable(GL_TEXTURE_2D);
+    }
+    /* Unhook, call original, rehook. */
+    DWORD old_prot;
+    VirtualProtect((void*)real_glColor4f, 5, PAGE_EXECUTE_READWRITE, &old_prot);
+    memcpy((void*)real_glColor4f, saved_bytes, 5);
+    VirtualProtect((void*)real_glColor4f, 5, old_prot, &old_prot);
+
+    real_glColor4f(r, g, b, a);
+
+    VirtualProtect((void*)real_glColor4f, 5, PAGE_EXECUTE_READWRITE, &old_prot);
+    uint8_t jmp[5];
+    jmp[0] = 0xE9;
+    int32_t rel = (int32_t)((uint8_t*)h_glColor4f - ((uint8_t*)real_glColor4f + 5));
+    memcpy(&jmp[1], &rel, 4);
+    memcpy((void*)real_glColor4f, jmp, 5);
+    VirtualProtect((void*)real_glColor4f, 5, old_prot, &old_prot);
+}
+
+void chams_init(void) {
+    HMODULE opengl = GetModuleHandleA("opengl32.dll");
+    if (!opengl) {
+        printf("  chams_init: can't find opengl32.dll\n");
+        return;
+    }
+    real_glColor4f = (glColor4f_fn)GetProcAddress(opengl, "glColor4f");
+    if (!real_glColor4f) {
+        printf("  chams_init: can't find glColor4f\n");
+        return;
+    }
+
+    printf("  chams_init: glColor4f at %p\n", (void*)real_glColor4f);
+    printf("  glColor4f bytes: ");
+    for (int i = 0; i < 16; i++)
+        printf("%02X ", ((uint8_t*)real_glColor4f)[i]);
+    printf("\n");
+
+    /* Save first 5 bytes */
+    memcpy(saved_bytes, (void*)real_glColor4f, 5);
+
+    /* Write relative jmp */
+    DWORD old_prot;
+    VirtualProtect((void*)real_glColor4f, 5, PAGE_EXECUTE_READWRITE, &old_prot);
+    uint8_t jmp[5];
+    jmp[0] = 0xE9;
+    int32_t rel = (int32_t)((uint8_t*)h_glColor4f - ((uint8_t*)real_glColor4f + 5));
+    memcpy(&jmp[1], &rel, 4);
+    memcpy((void*)real_glColor4f, jmp, 5);
+    VirtualProtect((void*)real_glColor4f, 5, old_prot, &old_prot);
+
+    glcolor_hooked = true;
+    printf("  chams_init: glColor4f hooked\n");
+}
+
+void chams_restore(void) {
+    if (glcolor_hooked && real_glColor4f) {
+        DWORD old_prot;
+        VirtualProtect((void*)real_glColor4f, 5, PAGE_EXECUTE_READWRITE, &old_prot);
+        memcpy((void*)real_glColor4f, saved_bytes, 5);
+        VirtualProtect((void*)real_glColor4f, 5, old_prot, &old_prot);
+        glcolor_hooked = false;
     }
 }
 
@@ -40,10 +113,12 @@ bool chams(void* this_ptr) {
     cl_entity_t* ent = i_enginestudio->GetCurrentEntity();
 
     if (ent->index == localplayer->index && setting & HAND_CHAMS) {
-        glDisable(GL_TEXTURE_2D);
-        set_chams_color(HANDS);
-        i_studiomodelrenderer->StudioRenderFinal(this_ptr);
-        glEnable(GL_TEXTURE_2D);
+        chams_r = cvar_color(cv_chams_hands_r);
+        chams_g = cvar_color(cv_chams_hands_g);
+        chams_b = cvar_color(cv_chams_hands_b);
+        chams_active = true;
+        call_StudioRenderFinal(this_ptr);
+        chams_active = false;
         return true;
     } else if (!(setting & PLAYER_CHAMS) || !valid_player(ent) ||
                !is_alive(ent)) {
@@ -52,17 +127,35 @@ bool chams(void* this_ptr) {
 
     const bool friendly = is_friend(ent);
 
-    glDisable(GL_TEXTURE_2D);
-
+    /* Pass 1: behind walls */
     glDisable(GL_DEPTH_TEST);
-    set_chams_color(friendly ? FRIEND_NOT_VISIBLE : ENEMY_NOT_VISIBLE);
-    i_studiomodelrenderer->StudioRenderFinal(this_ptr);
+    if (friendly) {
+        chams_r = cvar_color(cv_chams_friend_invis_r);
+        chams_g = cvar_color(cv_chams_friend_invis_g);
+        chams_b = cvar_color(cv_chams_friend_invis_b);
+    } else {
+        chams_r = cvar_color(cv_chams_enemy_invis_r);
+        chams_g = cvar_color(cv_chams_enemy_invis_g);
+        chams_b = cvar_color(cv_chams_enemy_invis_b);
+    }
+    chams_active = true;
+    call_StudioRenderFinal(this_ptr);
+    chams_active = false;
 
+    /* Pass 2: visible */
     glEnable(GL_DEPTH_TEST);
-    set_chams_color(friendly ? FRIEND_VISIBLE : ENEMY_VISIBLE);
-    i_studiomodelrenderer->StudioRenderFinal(this_ptr);
-
-    glEnable(GL_TEXTURE_2D);
+    if (friendly) {
+        chams_r = cvar_color(cv_chams_friend_vis_r);
+        chams_g = cvar_color(cv_chams_friend_vis_g);
+        chams_b = cvar_color(cv_chams_friend_vis_b);
+    } else {
+        chams_r = cvar_color(cv_chams_enemy_vis_r);
+        chams_g = cvar_color(cv_chams_enemy_vis_g);
+        chams_b = cvar_color(cv_chams_enemy_vis_b);
+    }
+    chams_active = true;
+    call_StudioRenderFinal(this_ptr);
+    chams_active = false;
 
     return true;
 }

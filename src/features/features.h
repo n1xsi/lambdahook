@@ -14,6 +14,8 @@ void correct_movement(usercmd_t* cmd, vec3_t old_angles);
 
 /* src/features/chams.cpp */
 bool chams(void* this_ptr);
+void chams_init(void);
+void chams_restore(void);
 
 /* src/features/aim.cpp */
 void aimbot(usercmd_t* cmd);
