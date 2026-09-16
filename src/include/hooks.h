@@ -42,7 +42,6 @@ extern detour_data_t detour_data_clmove;
 /* VMT hooks */
 DECL_HOOK_EXTERN(void, CL_CreateMove, float, usercmd_t*, int);
 DECL_HOOK_EXTERN(int, HUD_Redraw, float, int);
-DECL_HOOK_EXTERN(void, StudioRenderModel, void*);
 DECL_HOOK_EXTERN(void, CalcRefdef, ref_params_t*);
 DECL_HOOK_EXTERN(void, HUD_PostRunCmd, struct local_state_s*,
                  struct local_state_s*, struct usercmd_s*, int, double,

@@ -13,7 +13,24 @@
 /* Normal VMT hooks */
 DECL_HOOK(CL_CreateMove);
 DECL_HOOK(HUD_Redraw);
-DECL_HOOK(StudioRenderModel);
+/* StudioRenderModel is a __thiscall vtable function.
+ * We hook it as __fastcall (this in ecx, unused edx).
+ * Cannot use DECL_HOOK/ORIGINAL macros because they assume cdecl. */
+typedef void (__thiscall *StudioRenderModel_fn)(void* this_ptr);
+static StudioRenderModel_fn ho_StudioRenderModel_real = NULL;
+
+void __fastcall h_StudioRenderModel_thiscall(void* this_ptr, void* /* edx */) {
+    static int smr_log = 0;
+    if (smr_log < 5) {
+        smr_log++;
+        cl_entity_t* ent = i_enginestudio->GetCurrentEntity();
+        printf("  StudioRenderModel #%d: ent=%p idx=%d player=%d chams=%d\n",
+               smr_log, (void*)ent, ent ? ent->index : -1,
+               ent ? ent->player : 0, (int)cv_chams->value);
+    }
+    if (!chams(this_ptr))
+        ho_StudioRenderModel_real(this_ptr);
+}
 DECL_HOOK(CalcRefdef);
 DECL_HOOK(HUD_PostRunCmd);
 
@@ -25,25 +42,6 @@ DECL_DETOUR_TYPE(void, clmove_type);
 
 static bool clmove_hooked = false;
 
-/* VTable hook for StudioRenderModel */
-static void** smr_vtable = NULL;
-static void*  smr_orig_rendermodel = NULL;
-
-typedef void (__thiscall *StudioRenderModel_vtfn)(void* this_ptr);
-
-void __fastcall h_StudioRenderModel_vt(void* this_ptr, void* /* edx */) {
-    static int smr_vt_log = 0;
-    if (smr_vt_log < 5) {
-        smr_vt_log++;
-        cl_entity_t* ent = i_enginestudio->GetCurrentEntity();
-        printf("  StudioRenderModel_VT #%d: ent=%p idx=%d player=%d\n",
-               smr_vt_log, (void*)ent, ent ? ent->index : -1,
-               ent ? ent->player : 0);
-    }
-    if (!chams(this_ptr)) {
-        ((StudioRenderModel_vtfn)smr_orig_rendermodel)(this_ptr);
-    }
-}
 
 /*----------------------------------------------------------------------------*/
 
@@ -64,18 +62,28 @@ bool hooks_init(void) {
      * g_StudioRenderer is a flat struct (r_studio_interface_t), not a C++
      * object. Hook the function pointer directly in the struct. */
     if (i_studiomodelrenderer) {
-        printf("  hooking StudioRenderModel (flat struct)...\n");
-        printf("    g_StudioRenderer=%p\n", (void*)i_studiomodelrenderer);
+        printf("  hooking StudioRenderModel (vtable thiscall)...\n");
+        printf("    vtable at %p\n", (void*)i_studiomodelrenderer);
         printf("    StudioRenderModel=%p StudioRenderFinal=%p\n",
                (void*)i_studiomodelrenderer->StudioRenderModel,
                (void*)i_studiomodelrenderer->StudioRenderFinal);
-        HOOK(i_studiomodelrenderer, StudioRenderModel);
+
+        ho_StudioRenderModel_real = (StudioRenderModel_fn)i_studiomodelrenderer->StudioRenderModel;
+
+        DWORD old_prot;
+        VirtualProtect(&i_studiomodelrenderer->StudioRenderModel, sizeof(void*),
+                       PAGE_EXECUTE_READWRITE, &old_prot);
+        i_studiomodelrenderer->StudioRenderModel = (void (*)(void*))h_StudioRenderModel_thiscall;
+        VirtualProtect(&i_studiomodelrenderer->StudioRenderModel, sizeof(void*),
+                       old_prot, &old_prot);
+
         printf("    hooked -> %p\n", (void*)i_studiomodelrenderer->StudioRenderModel);
     } else {
         printf("  SKIP StudioRenderModel (no i_studiomodelrenderer)\n");
     }
 
-    /* Phase 3: glColor4f detour removed — chams call glColor4f directly */
+    /* Phase 3: glColor4f detour for chams coloring */
+    chams_init();
 
     /* Phase 4: CL_Move detour — scan hw.dll for the function */
     {
@@ -164,30 +172,23 @@ bool hooks_init(void) {
 }
 
 void hooks_restore(void) {
+    chams_restore();
+
     if (clmove_hooked)
         detour_del(&detour_data_clmove);
 
     /* Restore vtable hook */
-    if (smr_vtable && smr_orig_rendermodel) {
-        const int SMR_RENDERMODEL_IDX = 19;
+    if (i_studiomodelrenderer && ho_StudioRenderModel_real) {
         DWORD old_prot;
-        VirtualProtect(&smr_vtable[SMR_RENDERMODEL_IDX], sizeof(void*),
-                       PAGE_READWRITE, &old_prot);
-        smr_vtable[SMR_RENDERMODEL_IDX] = smr_orig_rendermodel;
-        VirtualProtect(&smr_vtable[SMR_RENDERMODEL_IDX], sizeof(void*),
+        VirtualProtect(&i_studiomodelrenderer->StudioRenderModel, sizeof(void*),
+                       PAGE_EXECUTE_READWRITE, &old_prot);
+        i_studiomodelrenderer->StudioRenderModel = (void (*)(void*))ho_StudioRenderModel_real;
+        VirtualProtect(&i_studiomodelrenderer->StudioRenderModel, sizeof(void*),
                        old_prot, &old_prot);
     }
 }
 
 /*----------------------------------------------------------------------------*/
-
-/* kbutton_t — engine's internal key state struct */
-typedef struct {
-    int down[2];
-    int state;
-} kbutton_t;
-
-static kbutton_t* kb_jump = NULL;
 
 void h_CL_CreateMove(float frametime, usercmd_t* cmd, int active) {
     ORIGINAL(CL_CreateMove, frametime, cmd, active);
@@ -237,21 +238,21 @@ void h_CL_CreateMove(float frametime, usercmd_t* cmd, int active) {
     bullet_tracers(cmd);
 
     /* Norecoil: compensate view punch by counter-rotating.
-     * CalcRefdef punchangle is always 0 in this engine version,
-     * so we read punchangle from the playermove struct instead. */
-    if (CVAR_ON(norecoil) && i_pmove) {
-        static int nr_log = 0;
-        vec3_t engine_angles;
-        i_engine->GetViewAngles(engine_angles);
+     * g_punchAngles is read from clientdata_t in HUD_PostRunCmd.
+     * The engine applies punchangle * 2 to the view. */
+    if (CVAR_ON(norecoil)) {
+        float px = g_punchAngles.x;
+        float py = g_punchAngles.y;
 
-        /* The engine applies punchangle * 2 to the view */
-        float px = i_pmove->punchangle.x;
-        float py = i_pmove->punchangle.y;
+        static int nr_log = 0;
         if (nr_log < 20 && (px != 0 || py != 0)) {
             nr_log++;
-            printf("  norecoil_cm#%d: pmove_punch=%.2f,%.2f\n", nr_log, px, py);
+            printf("  norecoil_cm#%d: punch=%.2f,%.2f\n", nr_log, px, py);
         }
+
         if (px != 0 || py != 0) {
+            vec3_t engine_angles;
+            i_engine->GetViewAngles(engine_angles);
             engine_angles.x -= px * 2;
             engine_angles.y -= py * 2;
             i_engine->SetViewAngles(engine_angles);
@@ -279,37 +280,11 @@ int h_HUD_Redraw(float time, int intermission) {
 
 /*----------------------------------------------------------------------------*/
 
-void h_StudioRenderModel(void* this_ptr) {
-    static int smr_log = 0;
-    if (smr_log < 5) {
-        smr_log++;
-        cl_entity_t* ent = i_enginestudio->GetCurrentEntity();
-        printf("  StudioRenderModel #%d: ent=%p idx=%d player=%d chams=%d\n",
-               smr_log, (void*)ent, ent ? ent->index : -1,
-               ent ? ent->player : 0, (int)cv_chams->value);
-    }
-    if (!chams(this_ptr))
-        ORIGINAL(StudioRenderModel, this_ptr);
-}
 
 /*----------------------------------------------------------------------------*/
 
 void h_CalcRefdef(ref_params_t* params) {
-    static int norecoil_log = 0;
-    if (CVAR_ON(norecoil) && norecoil_log < 20) {
-        norecoil_log++;
-        printf("  norecoil#%d BEFORE: punch=%.2f,%.2f,%.2f\n",
-               norecoil_log, params->punchangle.x, params->punchangle.y, params->punchangle.z);
-    }
-
-    vec_copy(g_punchAngles, params->punchangle);
-
     ORIGINAL(CalcRefdef, params);
-
-    if (CVAR_ON(norecoil) && norecoil_log <= 20) {
-        printf("  norecoil#%d AFTER:  punch=%.2f,%.2f,%.2f\n",
-               norecoil_log, params->punchangle.x, params->punchangle.y, params->punchangle.z);
-    }
 
     if (CVAR_ON(norecoil)) {
         params->punchangle.x = 0;
@@ -330,6 +305,18 @@ void h_HUD_PostRunCmd(struct local_state_s* from, struct local_state_s* to,
         g_flNextPrimaryAttack =
           to->weapondata[to->client.m_iId].m_flNextPrimaryAttack;
         g_iClip = to->weapondata[to->client.m_iId].m_iClip;
+
+        vec_copy(g_punchAngles, to->client.punchangle);
+
+        static int postrun_log = 0;
+        if (CVAR_ON(norecoil) && postrun_log < 20) {
+            float px = to->client.punchangle.x;
+            float py = to->client.punchangle.y;
+            if (px != 0 || py != 0) {
+                postrun_log++;
+                printf("  postrun_punch#%d: %.2f,%.2f\n", postrun_log, px, py);
+            }
+        }
     }
 }
 
