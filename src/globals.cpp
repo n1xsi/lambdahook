@@ -24,6 +24,7 @@ DECL_INTF(playermove_t, pmove);
 playermove_t** pp_pmove = NULL;
 DECL_INTF(engine_studio_api_t, enginestudio);
 DECL_INTF(StudioModelRenderer_t, studiomodelrenderer);
+r_studio_interface_t* g_pStudioAPI = NULL;
 
 /* Updated in CL_CreateMove hook */
 cl_entity_t* localplayer = NULL;
@@ -201,11 +202,23 @@ static playermove_t** find_pmove_ptr(void) {
 
         /* At +22 there's E9 (jmp) to a function that likely stores pmove.
          * Follow it. */
+        byte* cbase_pm = (byte*)client_dll;
+        IMAGE_DOS_HEADER* cdos_pm = (IMAGE_DOS_HEADER*)cbase_pm;
+        IMAGE_NT_HEADERS* cnt_pm = (IMAGE_NT_HEADERS*)(cbase_pm + cdos_pm->e_lfanew);
+        size_t csize_pm = cnt_pm->OptionalHeader.SizeOfImage;
+
         for (int i = 0; i < 32; i++) {
             if (func[i] == 0xE9) {
                 int32_t rel = *(int32_t*)(func + i + 1);
                 byte* target = func + i + 5 + rel;
                 printf("  following jmp at +%d to %p\n", i, target);
+
+                /* Validate target is within client.dll */
+                if (target < cbase_pm || target >= cbase_pm + csize_pm) {
+                    printf("  jmp target outside client.dll, skipping\n");
+                    break;
+                }
+
                 printf("  target bytes: ");
                 for (int d = 0; d < 64; d++)
                     printf("%02X ", target[d]);
@@ -263,30 +276,6 @@ static bool find_studio_interfaces(engine_studio_api_t** out_enginestudio,
         printf("%02X ", func[d]);
     printf("\n");
 
-    /* HUD_GetStudioModelInterface(int version, r_studio_interface_t **ppinterface,
-     *                             engine_studio_api_t *pstudio)
-     *
-     * The function does:
-     *   1. memcpy(IEngineStudio, pstudio, sizeof) — gives us IEngineStudio
-     *   2. *ppinterface = &g_StudioRenderer   — gives us g_StudioRenderer
-     *
-     * For the ppinterface store, look for:
-     *   mov eax,[esp+8]   (load ppinterface from stack)
-     *   mov dword ptr [eax], <imm32>  (C7 00 xx xx xx xx)
-     * The imm32 is &g_StudioRenderer.
-     *
-     * But g_StudioRenderer is a struct whose FIRST member is the vtable ptr
-     * (CStudioModelRenderer constructor). We need the actual struct address,
-     * which IS what C7 00 gives us. The problem is the struct layout:
-     * g_StudioRenderer starts with non-function data if it's a C++ class.
-     *
-     * Actually, the r_studio_interface_t that ppinterface points to has:
-     *   int version;
-     *   r_studio_interface_s funcs;  // <- this is what the engine uses
-     * So g_StudioRenderer has version at +0 and function ptrs at +4.
-     * Our StudioModelRenderer_t starts with function ptrs directly.
-     * We need to skip the version int. */
-
     engine_studio_api_t* found_studio = NULL;
     StudioModelRenderer_t* found_smr = NULL;
 
@@ -301,111 +290,6 @@ static bool find_studio_interfaces(engine_studio_api_t** out_enginestudio,
                         printf("  found IEngineStudio copy at %p\n", addr);
                     }
                     break;
-                }
-            }
-        }
-
-        /* C7 00 <imm32> = mov [eax], imm32 — stores &g_StudioRenderer
-         * C7 01 <imm32> = mov [ecx], imm32
-         * C7 02 <imm32> = mov [edx], imm32 */
-        if (func[i] == 0xC7 && func[i + 1] <= 0x07 &&
-            func[i + 1] != 0x04 && func[i + 1] != 0x05) {
-            void* addr = *(void**)(func + i + 2);
-            byte* cbase = (byte*)client_dll;
-            IMAGE_DOS_HEADER* cdos = (IMAGE_DOS_HEADER*)cbase;
-            IMAGE_NT_HEADERS* cnt = (IMAGE_NT_HEADERS*)(cbase + cdos->e_lfanew);
-            size_t csize = cnt->OptionalHeader.SizeOfImage;
-            if ((byte*)addr >= cbase && (byte*)addr < cbase + csize) {
-                if (!found_smr) {
-                    /* The engine's r_studio_interface_t has:
-                     *   int version;  // +0
-                     *   <function pointers>  // +4 onwards
-                     * Our StudioModelRenderer_t is just the function pointers.
-                     * So we need addr+4 to skip the version field. */
-                    printf("  found r_studio_interface at %p\n", addr);
-                    printf("    first 16 dwords:\n");
-                    for (int dd = 0; dd < 16; dd++)
-                        printf("      [%d] = %08X\n", dd, ((uint32_t*)addr)[dd]);
-
-                    uint32_t first = ((uint32_t*)addr)[0];
-                    uint32_t second = ((uint32_t*)addr)[1];
-                    byte* cbase2 = (byte*)client_dll;
-
-                    /* The engine's r_studio_interface_t has:
-                     *   int version;  // +0 = 1
-                     *   ... function pointers or vtable
-                     *
-                     * In GoldSrc 25th anniv, g_StudioRenderer is a C++ object.
-                     * The struct stored at *ppinterface is:
-                     *   int version;           // +0 = 1
-                     *   void* vtable_or_ptr;   // +4 = pointer to vtable/object
-                     * NOT inline function pointers.
-                     *
-                     * Check if second dword points to something that itself
-                     * contains many client.dll code pointers (vtable). */
-                    bool second_in_dll = ((byte*)(uintptr_t)second >= cbase2 &&
-                                          (byte*)(uintptr_t)second < cbase2 + csize);
-
-                    if (first == 1 && second_in_dll) {
-                        /* second could be a C++ object pointer whose first
-                         * dword is a vtable pointer. Check it. */
-                        uint32_t* obj = (uint32_t*)(uintptr_t)second;
-                        uint32_t maybe_vtbl = obj[0];
-                        printf("    obj at %p: first dword (vtbl?) = %08X\n",
-                               (void*)obj, maybe_vtbl);
-
-                        /* Check if maybe_vtbl points into client.dll */
-                        bool vtbl_in_dll = ((byte*)(uintptr_t)maybe_vtbl >= cbase2 &&
-                                            (byte*)(uintptr_t)maybe_vtbl < cbase2 + csize);
-                        if (vtbl_in_dll) {
-                            uint32_t* vtbl = (uint32_t*)(uintptr_t)maybe_vtbl;
-                            printf("    vtable at %p:\n", (void*)vtbl);
-                            for (int vv = 0; vv < 24; vv++)
-                                printf("      vtbl[%d] = %08X\n", vv, vtbl[vv]);
-                        }
-
-                        /* Also dump 24 dwords starting from obj directly,
-                         * in case it's a flat struct of function pointers
-                         * (no vtable indirection). */
-                        printf("    obj direct dump (24 dwords):\n");
-                        for (int vv = 0; vv < 24; vv++)
-                            printf("      obj[%d] = %08X\n", vv, obj[vv]);
-                    }
-
-                    /* For now, try the C++ vtable approach:
-                     * *ppinterface = &obj; obj has vtable at [0].
-                     * We need to hook the vtable entries, not the obj fields.
-                     * But our current HOOK macro expects a flat struct.
-                     *
-                     * Approach: if obj[0] is a valid vtable pointer, use
-                     * the vtable entries as our StudioModelRenderer_t.
-                     * The vtable layout matches StudioModelRenderer_t:
-                     *   [0] = CStudioModelRenderer
-                     *   [1] = ~CStudioModelRenderer
-                     *   ...
-                     *   [19] = StudioRenderModel
-                     *   [20] = StudioRenderFinal */
-                    if (first == 1 && second_in_dll) {
-                        uint32_t* obj = (uint32_t*)(uintptr_t)second;
-                        uint32_t maybe_vtbl = obj[0];
-                        bool vtbl_in_dll = ((byte*)(uintptr_t)maybe_vtbl >= cbase2 &&
-                                            (byte*)(uintptr_t)maybe_vtbl < cbase2 + csize);
-                        if (vtbl_in_dll) {
-                            /* Use vtable as our function pointer table */
-                            found_smr = (StudioModelRenderer_t*)(uintptr_t)maybe_vtbl;
-                            printf("  g_StudioRenderer = vtable at %p\n", (void*)found_smr);
-                        } else {
-                            /* Flat struct: skip version */
-                            found_smr = (StudioModelRenderer_t*)((byte*)addr + 4);
-                            printf("  g_StudioRenderer at %p (flat, skipped version)\n", (void*)found_smr);
-                        }
-                    } else if (first == 1) {
-                        found_smr = (StudioModelRenderer_t*)((byte*)addr + 4);
-                        printf("  g_StudioRenderer at %p (inline, skipped version=1)\n", (void*)found_smr);
-                    } else {
-                        found_smr = (StudioModelRenderer_t*)addr;
-                        printf("  g_StudioRenderer at %p (no version skip)\n", (void*)found_smr);
-                    }
                 }
             }
         }
@@ -428,6 +312,129 @@ static bool find_studio_interfaces(engine_studio_api_t** out_enginestudio,
 
     if (found_studio)
         *out_enginestudio = found_studio;
+
+    /* Find CStudioModelRenderer by following the E8 call in
+     * HUD_GetStudioModelInterface. That call goes to a small init
+     * function which references the global CStudioModelRenderer
+     * object via mov ecx, <imm32> (B9). The object's first dword
+     * is a vtable pointer containing 20+ code pointers. */
+    byte* cbase = (byte*)client_dll;
+    IMAGE_DOS_HEADER* cdos = (IMAGE_DOS_HEADER*)cbase;
+    IMAGE_NT_HEADERS* cnt = (IMAGE_NT_HEADERS*)(cbase + cdos->e_lfanew);
+    size_t csize = cnt->OptionalHeader.SizeOfImage;
+
+    for (int i = 0; i < 96; i++) {
+        if (func[i] != 0xE8)
+            continue;
+
+        int32_t rel = *(int32_t*)(func + i + 1);
+        byte* target = func + i + 5 + rel;
+
+        if (target < cbase || target >= cbase + csize)
+            continue;
+
+        printf("  E8 call at +%d -> %p\n", i, target);
+        printf("  target bytes: ");
+        for (int d = 0; d < 64; d++)
+            printf("%02X ", target[d]);
+        printf("\n");
+
+        /* Scan target for B9 (mov ecx, imm32) — this ptr */
+        for (int j = 0; j < 64; j++) {
+            if (target[j] != 0xB9)
+                continue;
+
+            uint32_t candidate = *(uint32_t*)(target + j + 1);
+            byte* cand_ptr = (byte*)(uintptr_t)candidate;
+            if (cand_ptr < cbase || cand_ptr >= cbase + csize)
+                continue;
+
+            uint32_t maybe_vtbl = *(uint32_t*)cand_ptr;
+            byte* vtbl_ptr = (byte*)(uintptr_t)maybe_vtbl;
+            if (vtbl_ptr < cbase || vtbl_ptr >= cbase + csize)
+                continue;
+
+            /* Verify vtable: count code pointers in client.dll */
+            uint32_t* vtbl = (uint32_t*)(uintptr_t)maybe_vtbl;
+            int code_ptrs = 0;
+            for (int v = 0; v < 24; v++) {
+                byte* vp = (byte*)(uintptr_t)vtbl[v];
+                if (vp >= cbase && vp < cbase + csize)
+                    code_ptrs++;
+            }
+
+            printf("  B9 at target+%d: obj=%p vtbl=%p code_ptrs=%d\n",
+                   j, cand_ptr, vtbl_ptr, code_ptrs);
+
+            if (code_ptrs >= 15) {
+                printf("  FOUND CStudioModelRenderer vtable at %p\n", vtbl_ptr);
+                printf("  vtable entries:\n");
+                for (int v = 0; v < 24; v++)
+                    printf("    [%d] = %08X\n", v, vtbl[v]);
+                found_smr = (StudioModelRenderer_t*)vtbl_ptr;
+                break;
+            }
+        }
+
+        if (found_smr)
+            break;
+
+        /* Also try E8 calls within the target function (nested call) */
+        for (int j = 0; j < 48; j++) {
+            if (target[j] != 0xE8)
+                continue;
+
+            int32_t rel2 = *(int32_t*)(target + j + 1);
+            byte* target2 = target + j + 5 + rel2;
+            if (target2 < cbase || target2 >= cbase + csize)
+                continue;
+
+            printf("  nested E8 at target+%d -> %p\n", j, target2);
+            printf("  target2 bytes: ");
+            for (int d = 0; d < 64; d++)
+                printf("%02X ", target2[d]);
+            printf("\n");
+
+            for (int k = 0; k < 64; k++) {
+                if (target2[k] != 0xB9)
+                    continue;
+
+                uint32_t candidate = *(uint32_t*)(target2 + k + 1);
+                byte* cand_ptr = (byte*)(uintptr_t)candidate;
+                if (cand_ptr < cbase || cand_ptr >= cbase + csize)
+                    continue;
+
+                uint32_t maybe_vtbl = *(uint32_t*)cand_ptr;
+                byte* vtbl_ptr = (byte*)(uintptr_t)maybe_vtbl;
+                if (vtbl_ptr < cbase || vtbl_ptr >= cbase + csize)
+                    continue;
+
+                uint32_t* vtbl = (uint32_t*)(uintptr_t)maybe_vtbl;
+                int code_ptrs = 0;
+                for (int v = 0; v < 24; v++) {
+                    byte* vp = (byte*)(uintptr_t)vtbl[v];
+                    if (vp >= cbase && vp < cbase + csize)
+                        code_ptrs++;
+                }
+
+                printf("  B9 at target2+%d: obj=%p vtbl=%p code_ptrs=%d\n",
+                       k, cand_ptr, vtbl_ptr, code_ptrs);
+
+                if (code_ptrs >= 15) {
+                    printf("  FOUND CStudioModelRenderer vtable at %p (nested)\n", vtbl_ptr);
+                    for (int v = 0; v < 24; v++)
+                        printf("    [%d] = %08X\n", v, vtbl[v]);
+                    found_smr = (StudioModelRenderer_t*)vtbl_ptr;
+                    break;
+                }
+            }
+            if (found_smr)
+                break;
+        }
+        if (found_smr)
+            break;
+    }
+
     if (found_smr)
         *out_smr = found_smr;
 

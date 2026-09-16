@@ -29,6 +29,7 @@ DECL_INTF_EXTERN(playermove_t, pmove);
 extern playermove_t** pp_pmove;
 DECL_INTF_EXTERN(engine_studio_api_t, enginestudio);
 DECL_INTF_EXTERN(StudioModelRenderer_t, studiomodelrenderer);
+extern r_studio_interface_t* g_pStudioAPI;
 
 extern cl_entity_t* localplayer;
 
