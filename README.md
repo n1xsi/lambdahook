@@ -36,7 +36,7 @@ Based on [8dcc](https://github.com/8dcc/hl-cheat) and [UnkwUsr](https://github.c
 compile [injector.c](injector/injector.c) ⟶ add built cheat dll to the same dir ⟶ start game ⟶ start injector.exe
 
 ## Logs
-Logs about inject, hooks and some features are written here: `C:\dod-cheat-log.txt`
+Logs about inject, hooks and some features are written here: `C:\lambdahook-log.txt`
 
 ## How to build
 
@@ -46,3 +46,5 @@ export PATH="/c/msys64/mingw32/bin:$PATH" && cd "C:\path\to\lambdahook\build" &&
 ```
 
 Result will be here: `build/bin/liblambdahook.dll`
+
+Also you can use the finished dll of cheat in [releases](https://github.com/n1xsi/lambdahook/releases) page.
