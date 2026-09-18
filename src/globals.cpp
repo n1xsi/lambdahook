@@ -444,7 +444,7 @@ static bool find_studio_interfaces(engine_studio_api_t** out_enginestudio,
 /*----------------------------------------------------------------------------*/
 
 bool globals_init(void) {
-    printf("dod-cheat: globals_init()\n");
+    printf("lambdahook: globals_init()\n");
 
     /* Phase A: Module handles */
     hw = (void*)GetModuleHandleA("hw.dll");
@@ -462,7 +462,7 @@ bool globals_init(void) {
     printf("  client.dll at %p\n", (void*)client_dll);
 
     /* Phase B: Find engine's cl_clientfunc_t table via data-reference scan */
-    printf("dod-cheat: Phase B - finding cl_funcs...\n");
+    printf("lambdahook: Phase B - finding cl_funcs...\n");
     i_client = find_client_funcs();
     if (!i_client) {
         ERR("Can't find cl_funcs table in hw.dll");
@@ -470,7 +470,7 @@ bool globals_init(void) {
     }
 
     /* Phase C: Find engine function table from client.dll's Initialize */
-    printf("dod-cheat: Phase C - finding engine funcs...\n");
+    printf("lambdahook: Phase C - finding engine funcs...\n");
     i_engine = find_engine_funcs();
     if (!i_engine) {
         ERR("Can't find engine function table");
@@ -478,7 +478,7 @@ bool globals_init(void) {
     }
 
     /* Phase D: Find pmove pointer location from PM_Move/HUD_PlayerMove */
-    printf("dod-cheat: Phase D - finding pmove...\n");
+    printf("lambdahook: Phase D - finding pmove...\n");
     pp_pmove = find_pmove_ptr();
     if (pp_pmove) {
         i_pmove = *pp_pmove;
@@ -489,7 +489,7 @@ bool globals_init(void) {
     }
 
     /* Phase E: Find studio interfaces from HUD_GetStudioModelInterface */
-    printf("dod-cheat: Phase E - finding studio interfaces...\n");
+    printf("lambdahook: Phase E - finding studio interfaces...\n");
     engine_studio_api_t* studio_ptr = NULL;
     StudioModelRenderer_t* smr_ptr = NULL;
     if (find_studio_interfaces(&studio_ptr, &smr_ptr)) {
@@ -506,7 +506,7 @@ bool globals_init(void) {
         return false;
     }
 
-    printf("dod-cheat: All interfaces resolved:\n");
+    printf("lambdahook: All interfaces resolved:\n");
     printf("  i_engine = %p\n", (void*)i_engine);
     printf("  i_client = %p\n", (void*)i_client);
     printf("  i_pmove  = %p\n", (void*)i_pmove);

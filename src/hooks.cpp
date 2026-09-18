@@ -46,7 +46,7 @@ static bool clmove_hooked = false;
 /*----------------------------------------------------------------------------*/
 
 bool hooks_init(void) {
-    printf("dod-cheat: hooks_init()\n");
+    printf("lambdahook: hooks_init()\n");
 
     /* Phase 1: VMT hooks on i_client */
     printf("  hooking CL_CreateMove...\n");
@@ -167,7 +167,7 @@ bool hooks_init(void) {
         }
     }
 
-    printf("dod-cheat: hooks_init() done (minimal mode)\n");
+    printf("lambdahook: hooks_init() done (minimal mode)\n");
     return true;
 }
 
@@ -269,7 +269,17 @@ int h_HUD_Redraw(float time, int intermission) {
     int ret = ORIGINAL(HUD_Redraw, time, intermission);
 
     /* Watermark */
-    engine_draw_text(5, 5, "dod-cheat", (rgb_t){ 255, 255, 255 });
+    /* Centered watermark */
+    {
+        SCREENINFO scr;
+        scr.iSize = sizeof(SCREENINFO);
+        i_engine->pfnGetScreenInfo(&scr);
+        const char* wm = "lambdahook";
+        int tw = 0;
+        for (const char* p = wm; *p; p++)
+            tw += scr.charWidths[(unsigned char)*p];
+        engine_draw_text(scr.iWidth / 2 - tw / 2, 5, (char*)wm, (rgb_t){ 255, 255, 255 });
+    }
 
     esp();
     custom_crosshair();

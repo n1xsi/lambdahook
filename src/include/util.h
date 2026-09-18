@@ -15,7 +15,7 @@ typedef struct {
 
 #define ERR(...)                                                               \
     do {                                                                       \
-        fprintf(stderr, "dod-cheat: %s: ", __func__);                          \
+        fprintf(stderr, "lambdahook: %s: ", __func__);                          \
         fprintf(stderr, __VA_ARGS__);                                          \
         fputc('\n', stderr);                                                   \
     } while (0)

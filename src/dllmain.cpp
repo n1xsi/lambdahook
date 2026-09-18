@@ -13,12 +13,12 @@ static HMODULE g_hModule = NULL;
 
 void load(void) {
     /* Log to file instead of console to avoid stealing hl.exe's window */
-    freopen("C:\\dod-cheat-log.txt", "w", stdout);
-    freopen("C:\\dod-cheat-log.txt", "a", stderr);
+    freopen("C:\\lambdahook-log.txt", "w", stdout);
+    freopen("C:\\lambdahook-log.txt", "a", stderr);
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 
-    printf("dod-cheat: Injected.\n");
+    printf("lambdahook: Injected.\n");
     fflush(stdout);
 
     /* Initialize globals/interfaces */
@@ -44,7 +44,7 @@ void load(void) {
 
     /* DoD-only — no multi-game detection needed */
 
-    i_engine->pfnClientCmd("echo \"dod-cheat loaded successfully!\"");
+    i_engine->pfnClientCmd("echo \"lambdahook loaded successfully!\"");
 
     loaded = true;
 }
@@ -57,7 +57,7 @@ void unload(void) {
         hooks_restore();
     }
 
-    printf("dod-cheat: Unloaded.\n\n");
+    printf("lambdahook: Unloaded.\n\n");
 }
 
 void self_unload(void) {
