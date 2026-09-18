@@ -30,7 +30,7 @@ int main(int argc, char* argv[]) {
     if (argc >= 2) {
         dll_path = argv[1];
     } else {
-        dll_path = "C:\\Users\\Administrator\\Documents\\.Projects\\C++\\dod-cheat\\build\\bin\\libdodcheat.dll";
+        dll_path = "C:\\Users\\Administrator\\Documents\\.Projects\\C++\\dod-cheat\\build\\bin\\liblambdahook.dll";
     }
 
     printf("Looking for hl.exe...\n");
