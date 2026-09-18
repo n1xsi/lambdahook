@@ -33,16 +33,16 @@ Based on [8dcc](https://github.com/8dcc/hl-cheat) and [UnkwUsr](https://github.c
 > If your ESP works incorrectly (e.g. in DoD) - just press button "M" to toggle map and fix ESP with boxes and names.
 
 ### Also cheat has its own **injector**:
-compile [injector.c](injector/injector.c) ⟶ start game ⟶ open injector.exe
+compile [injector.c](injector/injector.c) ⟶ add built cheat dll to the same dir ⟶ start game ⟶ start injector.exe
 
 ## Logs
 Logs about inject, hooks and some features are written here: `C:\dod-cheat-log.txt`
 
 ## How to build
 
-In windows 10 I use mingw32 and ninja:
+In windows 10 I use `mingw32` and `ninja`:
 ```bash
 export PATH="/c/msys64/mingw32/bin:$PATH" && cd "C:\path\to\lambdahook\build" && /c/msys64/mingw32/bin/ninja.exe 2>&1
 ```
 
-Result will be here: `build/bin/libdodcheat.dll`
+Result will be here: `build/bin/liblambdahook.dll`
