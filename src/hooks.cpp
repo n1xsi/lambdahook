@@ -172,6 +172,7 @@ bool hooks_init(void) {
 }
 
 void hooks_restore(void) {
+    chams_unhook_hw();
     chams_restore();
 
     if (clmove_hooked)
