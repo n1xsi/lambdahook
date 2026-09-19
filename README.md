@@ -18,6 +18,10 @@ Based on [8dcc](https://github.com/8dcc/hl-cheat) and [UnkwUsr](https://github.c
 
 ## Available features
 
+<div align="center">
+  <img width="50%" src="https://github.com/user-attachments/assets/4182383d-717f-4a81-9345-9faf24e96797" />
+</div>
+
 <h3> only in dod <img src="https://shared.fastly.steamstatic.com/community_assets/images/apps/30/aadc0ce51ff6ba2042d633f8ec033b0de62091d0.jpg" align="top" width="3%">: </h3>
 
 * **Aimbot** (with fov setting);
