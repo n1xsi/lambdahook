@@ -8,10 +8,18 @@
 #include "../include/cvars.h"
 #include "features.h"
 
-enum chams_settings {
-    DISABLED     = 0,
-    PLAYER_CHAMS = 1,
-    HAND_CHAMS   = 2,
+/* cv_chams values:
+ *   0 = off
+ *   1 = hands only
+ *   2 = allies only
+ *   3 = enemies only
+ *   4 = all (hands + allies + enemies) */
+enum {
+    CHAMS_OFF      = 0,
+    CHAMS_HANDS    = 1,
+    CHAMS_ALLIES   = 2,
+    CHAMS_ENEMIES  = 3,
+    CHAMS_ALL      = 4,
 };
 
 static inline float cvar_color(cvar_t* cv) {
@@ -219,52 +227,53 @@ static void render_colored(void* this_ptr, float r, float g, float b) {
 }
 
 bool chams(void* this_ptr) {
-    const int setting = cv_chams->value == 5.0f ? 7 : (int)cv_chams->value;
-    if (setting == DISABLED)
+    const int setting = (int)cv_chams->value;
+    if (setting == CHAMS_OFF)
         return false;
 
     cl_entity_t* ent = i_enginestudio->GetCurrentEntity();
+    const bool is_local = (ent->index == localplayer->index);
+    const bool friendly = !is_local && valid_player(ent) && is_alive(ent) && is_friend(ent);
+    const bool enemy    = !is_local && valid_player(ent) && is_alive(ent) && !is_friend(ent);
 
-    if (ent->index == localplayer->index && setting & HAND_CHAMS) {
+    /* Hands */
+    if (is_local && (setting == CHAMS_HANDS || setting == CHAMS_ALL)) {
         render_colored(this_ptr,
             cvar_color(cv_chams_hands_r),
             cvar_color(cv_chams_hands_g),
             cvar_color(cv_chams_hands_b));
         return true;
-    } else if (!(setting & PLAYER_CHAMS) || !valid_player(ent) ||
-               !is_alive(ent)) {
-        return false;
     }
 
-    const bool friendly = is_friend(ent);
-
-    /* Pass 1: behind walls */
-    glDisable(GL_DEPTH_TEST);
-    if (friendly) {
+    /* Allies */
+    if (friendly && (setting == CHAMS_ALLIES || setting == CHAMS_ALL)) {
+        glDisable(GL_DEPTH_TEST);
         render_colored(this_ptr,
             cvar_color(cv_chams_friend_invis_r),
             cvar_color(cv_chams_friend_invis_g),
             cvar_color(cv_chams_friend_invis_b));
-    } else {
-        render_colored(this_ptr,
-            cvar_color(cv_chams_enemy_invis_r),
-            cvar_color(cv_chams_enemy_invis_g),
-            cvar_color(cv_chams_enemy_invis_b));
-    }
-
-    /* Pass 2: visible */
-    glEnable(GL_DEPTH_TEST);
-    if (friendly) {
+        glEnable(GL_DEPTH_TEST);
         render_colored(this_ptr,
             cvar_color(cv_chams_friend_vis_r),
             cvar_color(cv_chams_friend_vis_g),
             cvar_color(cv_chams_friend_vis_b));
-    } else {
+        return true;
+    }
+
+    /* Enemies */
+    if (enemy && (setting == CHAMS_ENEMIES || setting == CHAMS_ALL)) {
+        glDisable(GL_DEPTH_TEST);
+        render_colored(this_ptr,
+            cvar_color(cv_chams_enemy_invis_r),
+            cvar_color(cv_chams_enemy_invis_g),
+            cvar_color(cv_chams_enemy_invis_b));
+        glEnable(GL_DEPTH_TEST);
         render_colored(this_ptr,
             cvar_color(cv_chams_enemy_vis_r),
             cvar_color(cv_chams_enemy_vis_g),
             cvar_color(cv_chams_enemy_vis_b));
+        return true;
     }
 
-    return true;
+    return false;
 }
