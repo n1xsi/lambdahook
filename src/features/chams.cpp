@@ -1,5 +1,4 @@
 #include <stdio.h>
-#include <string.h>
 #include <windows.h>
 #include <gl/gl.h>
 
@@ -15,94 +14,62 @@ enum chams_settings {
     HAND_CHAMS   = 2,
 };
 
-typedef void (__thiscall *StudioRenderFinal_fn)(void* this_ptr);
-
-static void call_StudioRenderFinal(void* this_ptr) {
-    StudioRenderFinal_fn fn = (StudioRenderFinal_fn)i_studiomodelrenderer->StudioRenderFinal;
-    fn(this_ptr);
-}
-
 static inline float cvar_color(cvar_t* cv) {
     return cv->value / 255.0f;
 }
 
-typedef void (APIENTRY *glColor4f_fn)(GLfloat, GLfloat, GLfloat, GLfloat);
-static glColor4f_fn real_glColor4f = NULL;
+void chams_init(void) {}
+void chams_restore(void) {}
+void chams_unhook_hw(void) {}
 
-static bool chams_active = false;
-static float chams_r = 1.0f, chams_g = 1.0f, chams_b = 1.0f;
+typedef void (__thiscall *RenderFinal_fn)(void* this_ptr);
 
-static bool glcolor_hooked = false;
-static uint8_t saved_bytes[5];
-
-static void APIENTRY h_glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
-    if (chams_active) {
-        r = chams_r;
-        g = chams_g;
-        b = chams_b;
-        /* Force textures off — StudioRenderFinal re-enables them */
-        glDisable(GL_TEXTURE_2D);
-    }
-    /* Unhook, call original, rehook. */
-    DWORD old_prot;
-    VirtualProtect((void*)real_glColor4f, 5, PAGE_EXECUTE_READWRITE, &old_prot);
-    memcpy((void*)real_glColor4f, saved_bytes, 5);
-    VirtualProtect((void*)real_glColor4f, 5, old_prot, &old_prot);
-
-    real_glColor4f(r, g, b, a);
-
-    VirtualProtect((void*)real_glColor4f, 5, PAGE_EXECUTE_READWRITE, &old_prot);
-    uint8_t jmp[5];
-    jmp[0] = 0xE9;
-    int32_t rel = (int32_t)((uint8_t*)h_glColor4f - ((uint8_t*)real_glColor4f + 5));
-    memcpy(&jmp[1], &rel, 4);
-    memcpy((void*)real_glColor4f, jmp, 5);
-    VirtualProtect((void*)real_glColor4f, 5, old_prot, &old_prot);
+static void __fastcall noop_hw(void* this_ptr, void* edx) {
+    (void)this_ptr; (void)edx;
 }
 
-void chams_init(void) {
-    HMODULE opengl = GetModuleHandleA("opengl32.dll");
-    if (!opengl) {
-        printf("  chams_init: can't find opengl32.dll\n");
-        return;
-    }
-    real_glColor4f = (glColor4f_fn)GetProcAddress(opengl, "glColor4f");
-    if (!real_glColor4f) {
-        printf("  chams_init: can't find glColor4f\n");
-        return;
-    }
+static void render_colored(void* this_ptr, float r, float g, float b) {
+    void** vtbl = (void**)i_studiomodelrenderer;
+    RenderFinal_fn real_final = (RenderFinal_fn)vtbl[20];
+    RenderFinal_fn real_hw    = (RenderFinal_fn)vtbl[21];
 
-    printf("  chams_init: glColor4f at %p\n", (void*)real_glColor4f);
-    printf("  glColor4f bytes: ");
-    for (int i = 0; i < 16; i++)
-        printf("%02X ", ((uint8_t*)real_glColor4f)[i]);
-    printf("\n");
-
-    /* Save first 5 bytes */
-    memcpy(saved_bytes, (void*)real_glColor4f, 5);
-
-    /* Write relative jmp */
+    /* Step 1: Replace HW with no-op, call RenderFinal for setup */
     DWORD old_prot;
-    VirtualProtect((void*)real_glColor4f, 5, PAGE_EXECUTE_READWRITE, &old_prot);
-    uint8_t jmp[5];
-    jmp[0] = 0xE9;
-    int32_t rel = (int32_t)((uint8_t*)h_glColor4f - ((uint8_t*)real_glColor4f + 5));
-    memcpy(&jmp[1], &rel, 4);
-    memcpy((void*)real_glColor4f, jmp, 5);
-    VirtualProtect((void*)real_glColor4f, 5, old_prot, &old_prot);
+    VirtualProtect(&vtbl[21], sizeof(void*), PAGE_EXECUTE_READWRITE, &old_prot);
+    vtbl[21] = (void*)noop_hw;
+    VirtualProtect(&vtbl[21], sizeof(void*), old_prot, &old_prot);
 
-    glcolor_hooked = true;
-    printf("  chams_init: glColor4f hooked\n");
-}
+    real_final(this_ptr);
 
-void chams_restore(void) {
-    if (glcolor_hooked && real_glColor4f) {
-        DWORD old_prot;
-        VirtualProtect((void*)real_glColor4f, 5, PAGE_EXECUTE_READWRITE, &old_prot);
-        memcpy((void*)real_glColor4f, saved_bytes, 5);
-        VirtualProtect((void*)real_glColor4f, 5, old_prot, &old_prot);
-        glcolor_hooked = false;
-    }
+    /* Step 2: Restore HW */
+    VirtualProtect(&vtbl[21], sizeof(void*), PAGE_EXECUTE_READWRITE, &old_prot);
+    vtbl[21] = (void*)real_hw;
+    VirtualProtect(&vtbl[21], sizeof(void*), old_prot, &old_prot);
+
+    /* Step 3: Set material color via glMaterialfv.
+     * glColor4f gets overwritten by StudioRenderFinal_Hardware,
+     * but glMaterialfv is NOT overwritten — it sticks.
+     * With GL_COLOR_MATERIAL disabled, the material properties
+     * are the sole source of color in the lighting pipeline.
+     * With GL_LIGHTING enabled and GL_TEXTURE_2D disabled,
+     * the output = lighting * material = our color. */
+    glPushAttrib(GL_ENABLE_BIT | GL_LIGHTING_BIT | GL_TEXTURE_BIT | GL_CURRENT_BIT);
+
+    glDisable(GL_TEXTURE_2D);
+    glEnable(GL_LIGHTING);
+    glDisable(GL_COLOR_MATERIAL);
+
+    GLfloat mat_color[] = { r, g, b, 1.0f };
+    GLfloat mat_black[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, mat_color);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, mat_color);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, mat_black);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, mat_black);
+
+    /* Step 4: Draw with real HW */
+    real_hw(this_ptr);
+
+    glPopAttrib();
 }
 
 bool chams(void* this_ptr) {
@@ -113,12 +80,10 @@ bool chams(void* this_ptr) {
     cl_entity_t* ent = i_enginestudio->GetCurrentEntity();
 
     if (ent->index == localplayer->index && setting & HAND_CHAMS) {
-        chams_r = cvar_color(cv_chams_hands_r);
-        chams_g = cvar_color(cv_chams_hands_g);
-        chams_b = cvar_color(cv_chams_hands_b);
-        chams_active = true;
-        call_StudioRenderFinal(this_ptr);
-        chams_active = false;
+        render_colored(this_ptr,
+            cvar_color(cv_chams_hands_r),
+            cvar_color(cv_chams_hands_g),
+            cvar_color(cv_chams_hands_b));
         return true;
     } else if (!(setting & PLAYER_CHAMS) || !valid_player(ent) ||
                !is_alive(ent)) {
@@ -130,32 +95,30 @@ bool chams(void* this_ptr) {
     /* Pass 1: behind walls */
     glDisable(GL_DEPTH_TEST);
     if (friendly) {
-        chams_r = cvar_color(cv_chams_friend_invis_r);
-        chams_g = cvar_color(cv_chams_friend_invis_g);
-        chams_b = cvar_color(cv_chams_friend_invis_b);
+        render_colored(this_ptr,
+            cvar_color(cv_chams_friend_invis_r),
+            cvar_color(cv_chams_friend_invis_g),
+            cvar_color(cv_chams_friend_invis_b));
     } else {
-        chams_r = cvar_color(cv_chams_enemy_invis_r);
-        chams_g = cvar_color(cv_chams_enemy_invis_g);
-        chams_b = cvar_color(cv_chams_enemy_invis_b);
+        render_colored(this_ptr,
+            cvar_color(cv_chams_enemy_invis_r),
+            cvar_color(cv_chams_enemy_invis_g),
+            cvar_color(cv_chams_enemy_invis_b));
     }
-    chams_active = true;
-    call_StudioRenderFinal(this_ptr);
-    chams_active = false;
 
     /* Pass 2: visible */
     glEnable(GL_DEPTH_TEST);
     if (friendly) {
-        chams_r = cvar_color(cv_chams_friend_vis_r);
-        chams_g = cvar_color(cv_chams_friend_vis_g);
-        chams_b = cvar_color(cv_chams_friend_vis_b);
+        render_colored(this_ptr,
+            cvar_color(cv_chams_friend_vis_r),
+            cvar_color(cv_chams_friend_vis_g),
+            cvar_color(cv_chams_friend_vis_b));
     } else {
-        chams_r = cvar_color(cv_chams_enemy_vis_r);
-        chams_g = cvar_color(cv_chams_enemy_vis_g);
-        chams_b = cvar_color(cv_chams_enemy_vis_b);
+        render_colored(this_ptr,
+            cvar_color(cv_chams_enemy_vis_r),
+            cvar_color(cv_chams_enemy_vis_g),
+            cvar_color(cv_chams_enemy_vis_b));
     }
-    chams_active = true;
-    call_StudioRenderFinal(this_ptr);
-    chams_active = false;
 
     return true;
 }
