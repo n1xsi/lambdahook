@@ -42,6 +42,135 @@ DECL_DETOUR_TYPE(void, clmove_type);
 
 static bool clmove_hooked = false;
 
+static float* g_cl_viewangles_ptr = NULL;
+
+/* norecoil: track SetViewAngles calls within CL_CreateMove */
+static bool nr_in_createmove = false;
+static int nr_sva_call_count = 0;    /* how many SVA calls this frame */
+static float nr_sva_log[8][2];       /* log first 8 calls: pitch,yaw */
+static float nr_pre_createmove[3];   /* cl.viewangles before CL_CreateMove */
+
+/* Hardware breakpoint on cl.viewangles to catch who writes recoil */
+static LONG WINAPI nr_veh_handler(EXCEPTION_POINTERS* ep) {
+    if (ep->ExceptionRecord->ExceptionCode != EXCEPTION_SINGLE_STEP)
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    /* DR6 bit 0 = DR0 triggered */
+    DWORD dr6 = ep->ContextRecord->Dr6;
+    if (!(dr6 & 1))
+        return EXCEPTION_CONTINUE_SEARCH;
+
+    /* Clear DR6 */
+    ep->ContextRecord->Dr6 = 0;
+
+    /* Log who wrote to cl.viewangles[0] */
+    static int veh_log = 0;
+    if (veh_log < 100) {
+        veh_log++;
+        void* eip = (void*)ep->ContextRecord->Eip;
+
+        /* Identify module */
+        HMODULE mod = NULL;
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                           (LPCSTR)eip, &mod);
+        char modname[128] = "?";
+        if (mod) GetModuleFileNameA(mod, modname, sizeof(modname));
+
+        /* Get just the filename */
+        char* slash = strrchr(modname, '\\');
+        if (!slash) slash = strrchr(modname, '/');
+        const char* shortname = slash ? slash + 1 : modname;
+
+        printf("  veh#%d: EIP=%p (%s+0x%x) val=%.4f\n",
+               veh_log, eip, shortname,
+               (unsigned)((byte*)eip - (byte*)mod),
+               g_cl_viewangles_ptr ? g_cl_viewangles_ptr[0] : 0.f);
+    }
+
+    /* Resume with RF flag to avoid re-triggering */
+    ep->ContextRecord->EFlags |= 0x10000; /* RF */
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+static void* g_veh_handle = NULL;
+
+static void nr_set_hwbp(void* addr) {
+    DWORD tid = GetCurrentThreadId();
+    HANDLE thread = OpenThread(THREAD_ALL_ACCESS, FALSE, tid);
+    if (!thread) {
+        printf("  hwbp: OpenThread failed err=%lu\n", GetLastError());
+        return;
+    }
+
+    CONTEXT ctx;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    if (!GetThreadContext(thread, &ctx)) {
+        printf("  hwbp: GetThreadContext failed err=%lu\n", GetLastError());
+        CloseHandle(thread);
+        return;
+    }
+
+    ctx.Dr0 = (DWORD)(uintptr_t)addr;
+    ctx.Dr7 &= ~(0xF << 16);
+    ctx.Dr7 |= (1 << 0);     /* DR0 local enable */
+    ctx.Dr7 |= (1 << 16);    /* condition = write (01) */
+    ctx.Dr7 |= (3 << 18);    /* len = 4 bytes (11) */
+    ctx.Dr6 = 0;
+
+    if (!SetThreadContext(thread, &ctx)) {
+        printf("  hwbp: SetThreadContext failed err=%lu\n", GetLastError());
+    }
+
+    /* Verify */
+    CONTEXT ctx2;
+    memset(&ctx2, 0, sizeof(ctx2));
+    ctx2.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+    GetThreadContext(thread, &ctx2);
+    printf("  hwbp: set DR0=%p DR7=0x%08x (verify DR0=%p DR7=0x%08x)\n",
+           (void*)(uintptr_t)ctx.Dr0, (unsigned)ctx.Dr7,
+           (void*)(uintptr_t)ctx2.Dr0, (unsigned)ctx2.Dr7);
+
+    CloseHandle(thread);
+}
+
+typedef void (*SetViewAngles_fn)(float*);
+typedef void (*GetViewAngles_fn)(float*);
+static SetViewAngles_fn orig_SetViewAngles = NULL;
+static GetViewAngles_fn orig_GetViewAngles = NULL;
+
+/* Return-address offset (within client.dll) of the SetViewAngles call-site
+ * that applies weapon recoil. Identified from sva_diag logs: this call-site
+ * writes the systematic recoil kick (pitch climbing, DoD left/right spread).
+ * The mouse/input call-site is +0x238dd and must be left alone. */
+#define NR_RECOIL_CALLSITE_OFF 0x3cf2b
+
+static void hooked_SetViewAngles(float* angles) {
+    if (CVAR_ON(norecoil)) {
+        void* retaddr = __builtin_return_address(0);
+        HMODULE mod = NULL;
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                           (LPCSTR)retaddr, &mod);
+        unsigned off = mod ? (unsigned)((byte*)retaddr - (byte*)mod) : 0;
+
+        if (off == NR_RECOIL_CALLSITE_OFF) {
+            /* Recoil call-site: block the write so recoil never enters
+             * cl.viewangles. Mouse (a separate call-site) is untouched. */
+            static int nr_block_log = 0;
+            if (nr_block_log < 40) {
+                nr_block_log++;
+                float cur[3] = {0};
+                if (orig_GetViewAngles) orig_GetViewAngles(cur);
+                printf("  nr_block_recoil#%d: blocked set %.4f,%.4f (cur=%.4f,%.4f)\n",
+                       nr_block_log, angles[0], angles[1], cur[0], cur[1]);
+            }
+            return;
+        }
+        orig_SetViewAngles(angles);
+        return;
+    }
+    orig_SetViewAngles(angles);
+}
 
 /*----------------------------------------------------------------------------*/
 
@@ -57,6 +186,92 @@ bool hooks_init(void) {
     HOOK(i_client, CalcRefdef);
     printf("  hooking HUD_PostRunCmd...\n");
     HOOK(i_client, HUD_PostRunCmd);
+
+    /* Phase 1b: Hook SetViewAngles/GetViewAngles in engine func table
+     * to intercept DoD weapon event recoil */
+    orig_SetViewAngles = (SetViewAngles_fn)i_engine->SetViewAngles;
+    orig_GetViewAngles = (GetViewAngles_fn)i_engine->GetViewAngles;
+    i_engine->SetViewAngles = hooked_SetViewAngles;
+    printf("  hooked SetViewAngles: orig=%p new=%p\n",
+           (void*)orig_SetViewAngles, (void*)hooked_SetViewAngles);
+
+    /* Dump SetViewAngles code more deeply to find the REAL cl.viewangles */
+    {
+        byte* fn = (byte*)orig_GetViewAngles;
+        byte* fn2 = (byte*)orig_SetViewAngles;
+        printf("  GetViewAngles at %p bytes: ", (void*)fn);
+        for (int i = 0; i < 32; i++)
+            printf("%02X ", fn[i]);
+        printf("\n");
+
+        printf("  SetViewAngles at %p bytes: ", (void*)fn2);
+        for (int i = 0; i < 64; i++)
+            printf("%02X ", fn2[i]);
+        printf("\n");
+
+        /* SetViewAngles calls through [imm32] at offset +8 (FF 15 xx xx xx xx).
+         * That indirect call might be the REAL setter. Dump that address. */
+        for (int i = 0; i < 32; i++) {
+            if (fn2[i] == 0xFF && fn2[i+1] == 0x15) {
+                void** call_ptr = *(void***)(fn2 + i + 2);
+                printf("  SVA indirect call at +%d: [%p] = %p\n",
+                       i, (void*)call_ptr, *call_ptr);
+                /* Dump the target function */
+                byte* target = (byte*)*call_ptr;
+                if (target) {
+                    printf("  SVA target bytes: ");
+                    for (int j = 0; j < 64; j++)
+                        printf("%02X ", target[j]);
+                    printf("\n");
+                }
+                break;
+            }
+        }
+
+        /* Similarly for GetViewAngles */
+        for (int i = 0; i < 32; i++) {
+            if (fn[i] == 0xFF && fn[i+1] == 0x15) {
+                void** call_ptr = *(void***)(fn + i + 2);
+                printf("  GVA indirect call at +%d: [%p] = %p\n",
+                       i, (void*)call_ptr, *call_ptr);
+                byte* target = (byte*)*call_ptr;
+                if (target) {
+                    printf("  GVA target bytes: ");
+                    for (int j = 0; j < 64; j++)
+                        printf("%02X ", target[j]);
+                    printf("\n");
+                }
+                break;
+            }
+        }
+
+        /* Extract cl.viewangles address from SetViewAngles:
+         * Pattern: F3 0F 11 05 XX XX XX XX  (movss [addr], xmm0)
+         * The address is at offset +17 in the function bytes we see. */
+        float* cl_viewangles = NULL;
+        for (int i = 0; i < 48; i++) {
+            if (fn2[i] == 0xF3 && fn2[i+1] == 0x0F && fn2[i+2] == 0x11 && fn2[i+3] == 0x05) {
+                cl_viewangles = *(float**)(fn2 + i + 4);
+                printf("  cl.viewangles found at %p\n", (void*)cl_viewangles);
+                break;
+            }
+        }
+
+        if (cl_viewangles) {
+            printf("  cl.viewangles value: %.2f, %.2f, %.2f\n",
+                   cl_viewangles[0], cl_viewangles[1], cl_viewangles[2]);
+            g_cl_viewangles_ptr = cl_viewangles;
+
+            /* Install hardware breakpoint on cl.viewangles[0] to find who writes recoil */
+            g_veh_handle = AddVectoredExceptionHandler(1, nr_veh_handler);
+            if (g_veh_handle) {
+                nr_set_hwbp((void*)cl_viewangles);
+                printf("  hwbp installed on cl.viewangles[0] at %p\n", (void*)cl_viewangles);
+            } else {
+                printf("  FAILED to install VEH handler\n");
+            }
+        }
+    }
 
     /* Phase 2: StudioRenderModel flat struct hook.
      * g_StudioRenderer is a flat struct (r_studio_interface_t), not a C++
@@ -187,12 +402,51 @@ void hooks_restore(void) {
         VirtualProtect(&i_studiomodelrenderer->StudioRenderModel, sizeof(void*),
                        old_prot, &old_prot);
     }
+
+    /* Restore SetViewAngles */
+    if (orig_SetViewAngles)
+        i_engine->SetViewAngles = (void (*)(float*))orig_SetViewAngles;
+
+    /* Remove hardware breakpoint and VEH */
+    if (g_veh_handle) {
+        CONTEXT ctx;
+        ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+        GetThreadContext(GetCurrentThread(), &ctx);
+        ctx.Dr0 = 0;
+        ctx.Dr7 &= ~((0xF << 16) | (1 << 0));
+        ctx.Dr6 = 0;
+        SetThreadContext(GetCurrentThread(), &ctx);
+        RemoveVectoredExceptionHandler(g_veh_handle);
+        g_veh_handle = NULL;
+    }
 }
 
 /*----------------------------------------------------------------------------*/
 
+/*----------------------------------------------------------------------------*/
+
 void h_CL_CreateMove(float frametime, usercmd_t* cmd, int active) {
+    bool do_nr = CVAR_ON(norecoil) && g_cl_viewangles_ptr;
+
+    float va_before[3] = {0};
+    if (do_nr) {
+        va_before[0] = g_cl_viewangles_ptr[0];
+        va_before[1] = g_cl_viewangles_ptr[1];
+        va_before[2] = g_cl_viewangles_ptr[2];
+    }
+
+    /* Do NOT allow SetViewAngles during CL_CreateMove either —
+     * DoD applies recoil via gEngfuncs.SetViewAngles inside weapon events.
+     * Mouse input writes to cl.viewangles directly, not through SetViewAngles. */
+    nr_sva_call_count = 0;
+    nr_in_createmove = true;
     ORIGINAL(CL_CreateMove, frametime, cmd, active);
+    nr_in_createmove = false;
+
+    if (do_nr) {
+        /* diagnostics printed from hooked_SetViewAngles */
+        (void)va_before;
+    }
 
     vec3_t old_angles = cmd->viewangles;
 
@@ -238,27 +492,6 @@ void h_CL_CreateMove(float frametime, usercmd_t* cmd, int active) {
     aimbot(cmd);
     bullet_tracers(cmd);
 
-    /* Norecoil: compensate view punch by counter-rotating.
-     * g_punchAngles is read from clientdata_t in HUD_PostRunCmd.
-     * The engine applies punchangle * 2 to the view. */
-    if (CVAR_ON(norecoil)) {
-        float px = g_punchAngles.x;
-        float py = g_punchAngles.y;
-
-        static int nr_log = 0;
-        if (nr_log < 20 && (px != 0 || py != 0)) {
-            nr_log++;
-            printf("  norecoil_cm#%d: punch=%.2f,%.2f\n", nr_log, px, py);
-        }
-
-        if (px != 0 || py != 0) {
-            vec3_t engine_angles;
-            i_engine->GetViewAngles(engine_angles);
-            engine_angles.x -= px * 2;
-            engine_angles.y -= py * 2;
-            i_engine->SetViewAngles(engine_angles);
-        }
-    }
 
     correct_movement(cmd, old_angles);
     ang_clamp(&cmd->viewangles);
@@ -298,9 +531,20 @@ void h_CalcRefdef(ref_params_t* params) {
     ORIGINAL(CalcRefdef, params);
 
     if (CVAR_ON(norecoil)) {
-        params->punchangle.x = 0;
-        params->punchangle.y = 0;
-        params->punchangle.z = 0;
+        static int cr_log = 0;
+        bool lmb = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+        if (lmb && cr_log < 60) {
+            cr_log++;
+            printf("  cr#%d: pa=%.4f,%.4f,%.4f clva=%.4f,%.4f va=%.4f,%.4f\n",
+                   cr_log,
+                   params->punchangle.x, params->punchangle.y, params->punchangle.z,
+                   params->cl_viewangles.x, params->cl_viewangles.y,
+                   params->viewangles.x, params->viewangles.y);
+        }
+
+        params->viewangles.x -= params->punchangle.x * 2;
+        params->viewangles.y -= params->punchangle.y * 2;
+        params->viewangles.z -= params->punchangle.z * 2;
     }
 }
 
