@@ -34,6 +34,7 @@ Based on [8dcc](https://github.com/8dcc/hl-cheat) and [UnkwUsr](https://github.c
 <h3> in other goldsrc games (e.g. <img src="https://shared.fastly.steamstatic.com/community_assets/images/apps/10/6b0312cda02f5f777efa2f3318c307ff9acafbb5.jpg" align="top" width="3%">, <img src="https://shared.fastly.steamstatic.com/community_assets/images/apps/70/95be6d131fc61f145797317ca437c9765f24b41c.jpg" align="top" width="3%">, <img src="https://shared.fastly.steamstatic.com/community_assets/images/apps/20/38ea7ebe3c1abbbbf4eabdbef174c41a972102b9.jpg" align="top" width="3%">, <img src="https://shared.fastly.steamstatic.com/community_assets/images/apps/40/c525f76c8bc7353db4fd74b128c4ae2028426c2a.jpg" align="top" width="3%">, <img src="https://shared.fastly.steamstatic.com/community_assets/images/apps/60/98c69e04cd59b838e05cb6980c12c05874c6419e.jpg" align="top" width="3%">): </h3>
 
 * **ESP**;
+* **NoRecoil** (ONLY turns off aim punch);
 * **Crosshair overlay**.
 
 > [!NOTE]
