@@ -26,4 +26,11 @@ void custom_crosshair(void);
 void bullet_tracers(usercmd_t* cmd);
 void draw_fov_circle(void);
 
+/* src/features/nospread.cpp */
+void nospread_recon(void);
+void nospread_on_createmove(usercmd_t* cmd);
+void nospread_note_fire_seed(unsigned int random_seed);
+extern unsigned int g_ns_random_seed;
+extern float g_ns_last_cone;
+
 #endif /* FEATURES_H_ */

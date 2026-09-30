@@ -383,6 +383,8 @@ bool hooks_init(void) {
     }
 
     printf("lambdahook: hooks_init() done (minimal mode)\n");
+
+    nospread_recon(); /* static scan of client.dll for the shared PRNG */
     return true;
 }
 
@@ -494,6 +496,7 @@ void h_CL_CreateMove(float frametime, usercmd_t* cmd, int active) {
 
 
     correct_movement(cmd, old_angles);
+    nospread_on_createmove(cmd);
     ang_clamp(&cmd->viewangles);
 }
 
@@ -553,9 +556,32 @@ void h_CalcRefdef(ref_params_t* params) {
 void h_HUD_PostRunCmd(struct local_state_s* from, struct local_state_s* to,
                       struct usercmd_s* cmd, int runfuncs, double time,
                       unsigned int random_seed) {
+    /* Publish the shared seed BEFORE the game runs weapon prediction, so the
+     * UTIL_SharedRandomFloat capture hook can correlate its base seed with it. */
+    g_ns_random_seed = random_seed;
+
+    /* [ns-seq] per-command seed trace: reveals how random_seed advances from one
+     * command to the next (need the per-command delta to predict the seed of the
+     * command being built in CL_CreateMove, before it is sent). */
+    {
+        static int ns_seq_log = 0;
+        static unsigned int ns_prev_seed = 0;
+        if (ns_seq_log < 120) {
+            ns_seq_log++;
+            int atk = (cmd->buttons & IN_ATTACK) ? 1 : 0;
+            printf("[ns-seq] #%d rf=%d rs=%u d=%d atk=%d\n",
+                   ns_seq_log, runfuncs, random_seed,
+                   (int)(random_seed - ns_prev_seed), atk);
+            fflush(stdout);
+        }
+        ns_prev_seed = random_seed;
+    }
+
     ORIGINAL(HUD_PostRunCmd, from, to, cmd, runfuncs, time, random_seed);
 
     if (runfuncs) {
+        nospread_note_fire_seed(random_seed);
+
         g_flNextAttack = to->client.m_flNextAttack;
         g_flNextPrimaryAttack =
           to->weapondata[to->client.m_iId].m_flNextPrimaryAttack;
