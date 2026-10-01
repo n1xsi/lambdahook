@@ -55,6 +55,7 @@ DECL_CVAR_EXTERN(chams_hands_b);
 DECL_CVAR_EXTERN(crosshair);
 DECL_CVAR_EXTERN(tracers);
 DECL_CVAR_EXTERN(norecoil);
+DECL_CVAR_EXTERN(nospread);
 DECL_CVAR_EXTERN(clmove);
 DECL_CVAR_EXTERN(fov_circle);
 

@@ -28,6 +28,7 @@ DECL_CVAR(chams_hands_b);
 DECL_CVAR(crosshair);
 DECL_CVAR(tracers);
 DECL_CVAR(norecoil);
+DECL_CVAR(nospread);
 DECL_CVAR(clmove);
 DECL_CVAR(fov_circle);
 
@@ -60,6 +61,7 @@ bool cvars_init(void) {
     REGISTER_CVAR(crosshair, 0);
     REGISTER_CVAR(tracers, 0);
     REGISTER_CVAR(norecoil, 0);
+    REGISTER_CVAR(nospread, 0);
     REGISTER_CVAR(clmove, 0);
     REGISTER_CVAR(fov_circle, 0);
 
