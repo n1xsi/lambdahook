@@ -360,56 +360,9 @@ void nospread_note_fire_seed(unsigned int random_seed) {
     (void)random_seed;
 }
 
-/* Called from h_CL_CreateMove AFTER the original ran (cmd->viewangles = true aim).
- * Predicts this command's spread and counter-rotates viewangles so the server's
- * re-added spread cancels out. Silent: only cmd->viewangles is touched, not the
- * local view (cl.viewangles), so the crosshair does not move.
- *
- * Seed prediction: the ComputeSpread hook records the actual firing seed.
- * Live data shows seeds +8 apart between shots. So next = last_cs_seed + 8. */
+/* No longer needed — spread is zeroed directly in ComputeSpread hook. */
 void nospread_on_createmove(usercmd_t* cmd) {
-    unsigned int seed = g_ns_last_cs_seed + 8;
-    g_ns_predicted_seed = seed;
-
-    if (!cv_nospread || cv_nospread->value == 0.0f) return;
-    if (!g_ns_has_cs_seed) return;
-
-    /* The engine overwrites cmd->buttons AFTER CL_CreateMove, so IN_ATTACK is
-     * never set here. Detect firing via mouse button + weapon ready. */
-    bool lmb = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
-    if (!lmb) return;
-    if (g_flNextPrimaryAttack > 0.0f) return; /* weapon not ready yet */
-
-    /* Only compensate ONCE per seed — avoid applying the same correction every
-     * frame while LMB is held between shots. */
-    static unsigned int last_compensated_seed = 0;
-    if (seed == last_compensated_seed) return;
-    last_compensated_seed = seed;
-
-    float cone = g_ns_last_cone;
-    if (cone <= 0.0f) return;
-
-    float x = ns_SharedRandomFloat(seed + 0, -0.5f, 0.5f) +
-              ns_SharedRandomFloat(seed + 1, -0.5f, 0.5f);
-    float y = ns_SharedRandomFloat(seed + 2, -0.5f, 0.5f) +
-              ns_SharedRandomFloat(seed + 3, -0.5f, 0.5f);
-
-    /* Spread offsets (x*cone, y*cone) are direction-vector components, not angles.
-     * Convert to degrees: atan2 of the offset over unit forward (1.0). */
-    const float RAD2DEG = 57.2957795f;
-    float dyaw   = atanf(x * cone) * RAD2DEG;
-    float dpitch = atanf(y * cone) * RAD2DEG;
-
-    cmd->viewangles.y -= dyaw;
-    cmd->viewangles.x += dpitch;
-
-    static int comp_log = 0;
-    if (comp_log < 80) {
-        comp_log++;
-        printf("[ns-comp] #%d seed=%u cone=%.5f x=%.4f y=%.4f dyaw=%.4f dpitch=%.4f\n",
-               comp_log, seed, cone, x, y, dyaw, dpitch);
-        fflush(stdout);
-    }
+    (void)cmd;
 }
 
 /*----------------------------------------------------------------------------*/
