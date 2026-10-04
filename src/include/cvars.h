@@ -58,6 +58,7 @@ DECL_CVAR_EXTERN(norecoil);
 DECL_CVAR_EXTERN(nospread);
 DECL_CVAR_EXTERN(clmove);
 DECL_CVAR_EXTERN(fov_circle);
+DECL_CVAR_EXTERN(grenade_esp);
 
 /*----------------------------------------------------------------------------*/
 
