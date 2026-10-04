@@ -33,4 +33,7 @@ void nospread_note_fire_seed(unsigned int random_seed);
 extern unsigned int g_ns_random_seed;
 extern float g_ns_last_cone;
 
+/* src/features/grenade_esp.cpp */
+void grenade_esp(void);
+
 #endif /* FEATURES_H_ */

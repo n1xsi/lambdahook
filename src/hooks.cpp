@@ -519,6 +519,7 @@ int h_HUD_Redraw(float time, int intermission) {
     }
 
     esp();
+    grenade_esp();
     custom_crosshair();
     draw_fov_circle();
 
